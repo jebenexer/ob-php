@@ -33,7 +33,8 @@
 
 ;;; Code:
 (require 'ob)
-(require 'ob-eval)
+;(require 'ob-eval)
+(eval-when-compile (require 'cl))
 
 (add-to-list 'org-babel-tangle-lang-exts '("php"))
 
@@ -42,6 +43,15 @@
 (defvar org-babel-php-command "php"
   "Name of command to use for executing ruby code.")
 
+(defconst org-babel-header-args:php
+  '((dbhost	       . :any)
+    (dbport	       . :any)
+    (dbuser	       . :any)
+    (dbpassword	       . :any)
+    (database	       . :any)
+    (auto_prepend_file . :any))
+  "PHP/SQL-specific header arguments.")
+
 (defun org-babel-execute:php (body params)
   "Execute a block of PHP code with Babel.
 This function is called by `org-babel-execute-src-block'."
@@ -49,7 +59,12 @@ This function is called by `org-babel-execute-src-block'."
          (result-params (cdr (assoc :result-params params)))
          (result-type (cdr (assoc :result-type params)))
          (full-body (org-babel-expand-body:generic
-                     body params (org-babel-variable-assignments:php params)))
+                     body params
+                     (append
+                      (org-babel-variable-assignments:php params)
+                      (org-babel-php-prepend params)
+                      (org-babel-ini-assignments:php params)
+                      )))
          (result (org-babel-php-evaluate session full-body result-type result-params)))
     (org-babel-reassemble-table
      result
@@ -57,6 +72,28 @@ This function is called by `org-babel-execute-src-block'."
                           (cdr (assoc :colnames params)))
      (org-babel-pick-name (cdr (assoc :rowname-names params))
                           (cdr (assoc :rownames params))))))
+
+(defun org-babel-php-prepend (params)
+  "Include prepended file"
+  (list (if (cdr (assoc :auto_prepend_file params))
+        (format "include '%s';"
+                (cdr (assoc :auto_prepend_file params))))))
+
+(defun org-babel-ini-assignments:php (params)
+  "Return PHP ini Assignments"
+  (mapcar
+   (lambda (pair)
+     (if
+         (cdr (assoc (cdr pair) params))
+         (format "ini_set('%s', '%s');"
+                 (car pair)
+                 (cdr (assoc (cdr pair) params)))
+       ))
+   '(("mysql.default_host"     . :dbhost)
+     ("mysql.default_user"     . :dbuser)
+     ("mysql.default_password" . :dbpassword)
+     ("mysql.default_port"     . :dbport)
+     ("mysql.default_database" . :database))))
 
 (defun org-babel-variable-assignments:php (params)
   "Return list of PHP statements assigning the block's variables."
@@ -124,21 +161,22 @@ repl so that we don't clutter it."
 (defvar org-babel-php-wrapper-method
   "
 <?php
-$code = <<<'EOF'
+$results = eval(<<<'ORGMODE_EVAL_PHP'
 %s
-EOF;
-$results = eval($code);
+ORGMODE_EVAL_PHP
+);
 file_put_contents('%s', $results);
 ")
 
 (defvar org-babel-php-pp-wrapper-method
   "
 <?php
-$code = <<<'EOF'
+ob_start();
+var_dump(array(eval(<<<'ORGMODE_EVAL_PHP'
 %s
-EOF;
-$results = eval($code);
-file_put_contents('%s', print_r($results, true));
+ORGMODE_EVAL_PHP
+), print(ob_get_clean()), ob_start())[0]);
+file_put_contents('%s', ob_get_clean());
 ")
 
 (defun org-babel-php-evaluate (session body &optional result-type result-params)
